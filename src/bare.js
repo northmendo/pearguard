@@ -11,6 +11,10 @@ function localDateStr(ts) {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')
 }
 
+// Fix hypercore's crash after a flush before any core opens
+// (see hypercoreSnapshotPatch.js).
+require('./hypercoreSnapshotPatch').applySnapshotFlushFix(require('hypercore/lib/session-state'))
+
 const Hyperbee   = require('hyperbee')
 const Hypercore  = require('hypercore')
 const Hyperswarm = require('hyperswarm')
