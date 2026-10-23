@@ -1,0 +1,16 @@
+[Unit]
+Description=PearGuard Watchdog
+Documentation=https://github.com/peerloomllc/pearguard
+After=systemd-logind.service
+
+[Service]
+Type=simple
+ExecStart=/bin/bash /opt/PearGuard/resources/linux-watchdog.sh
+Restart=always
+RestartSec=10
+# PearGuard itself runs in the user's own systemd manager, not in this
+# cgroup, so stopping the watchdog never takes the app down with it.
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target
