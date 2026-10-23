@@ -38,3 +38,12 @@ fi
 if hash update-desktop-database 2>/dev/null; then
     update-desktop-database /usr/share/applications || true
 fi
+
+# Root watchdog: restarts PearGuard in the child's desktop session if it is
+# closed or freezes. Skipped where systemd is not the init system.
+if [ -d /run/systemd/system ] && [ -f '/opt/PearGuard/resources/pearguard-watchdog.service' ]; then
+    install -m 0644 '/opt/PearGuard/resources/pearguard-watchdog.service' '/lib/systemd/system/pearguard-watchdog.service' || true
+    systemctl daemon-reload || true
+    systemctl enable pearguard-watchdog.service || true
+    systemctl restart pearguard-watchdog.service || true
+fi

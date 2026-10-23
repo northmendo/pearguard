@@ -57,11 +57,11 @@ All data is encrypted in transit and every policy update is cryptographically si
 ### Enforcement
 On Android child devices, PearGuard uses Android's Accessibility Service and Device Admin APIs to enforce app blocks, time limits and bedtime windows. These are standard Android parental-control surfaces - the child cannot disable them without the parent's approval.
 
-On Windows child devices, enforcement runs in user space: a foreground-window monitor watches which app is in front and an overlay covers a blocked app when a time limit or schedule kicks in. The blocked app keeps running behind the overlay. A watchdog Windows Service and a scheduled task relaunch the client if it stops. See the [Windows Client](#windows-client) section for details.
+On Windows child devices, enforcement runs in user space: a foreground-window monitor watches which app is in front and an overlay covers a blocked app when a time limit or schedule kicks in. The blocked app keeps running behind the overlay. A watchdog Windows Service and a scheduled task relaunch the client if it stops, and the service also restarts it if it freezes. See the [Windows Client](#windows-client) section for details.
 
-Linux child builds ship as `.deb` and `.AppImage` alongside the Windows installer and use the same desktop client. Enforcement is more limited there: there is no process watchdog on Linux yet, so nothing relaunches the client if it is killed.
+Linux child builds ship as `.deb` and `.AppImage` alongside the Windows installer and use the same desktop client. The `.deb` installs a watchdog system service that runs as root and restarts the client in the child's desktop session if it is closed or freezes. The `.AppImage` has no installer, so it relies on a login autostart entry only and nothing relaunches it if it is killed.
 
-**Desktop enforcement is deterrence, not containment.** On both Windows and Linux the overlay runs at the child's own privilege level and covers the primary display only. On Windows the watchdog service runs as SYSTEM, so removing it needs admin rights; Linux has no watchdog. A technically capable child with admin rights can defeat it. Android enforcement is the strong path; desktop is suited to younger children and to households where the rules are agreed rather than contested.
+**Desktop enforcement is deterrence, not containment.** On both Windows and Linux the overlay runs at the child's own privilege level. The watchdog runs as SYSTEM on Windows and as root on Linux (`.deb` only), so removing it needs admin rights. A technically capable child with admin rights can defeat it. Android enforcement is the strong path; desktop is suited to younger children and to households where the rules are agreed rather than contested.
 
 ### Pairing
 Parent and child pair via an invite link or QR code. The link encodes the cryptographic address of the pairing - there's no server involved. After pairing, both devices remember each other.

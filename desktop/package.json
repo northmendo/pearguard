@@ -131,11 +131,20 @@
           "filter": [
             "**/*"
           ]
+        },
+        {
+          "from": "build/linux-watchdog.sh",
+          "to": "linux-watchdog.sh"
+        },
+        {
+          "from": "build/pearguard-watchdog.service",
+          "to": "pearguard-watchdog.service"
         }
       ]
     },
     "deb": {
       "afterInstall": "build/deb-postinst.sh",
+      "afterRemove": "build/deb-postrm.sh",
       "depends": [
         "libgtk-3-0",
         "libnotify4",
@@ -156,7 +165,9 @@
         "--replaces",
         "pearguard-windows",
         "--conflicts",
-        "pearguard-windows"
+        "pearguard-windows",
+        "--before-remove",
+        "build/deb-prerm.sh"
       ]
     },
     "publish": [

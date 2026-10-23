@@ -6,6 +6,13 @@
 # relaunched exe in the service session with no visible tray or window;
 # routing through the user's token fixes that.
 #
+# It also restarts a PearGuard that is running but frozen. The app's main
+# process rewrites lastHeartbeat in runtime-state.json every 30s
+# (src/main/tamper-detector.js); if that value stops changing for
+# $staleSeconds, the process tree is killed and relaunched. Staleness is
+# timed on this script's own monotonic clock, so a child moving the system
+# clock cannot make a healthy app look frozen.
+#
 # This is the second, independent watchdog. The scheduled-task watchdog
 # (registered by the app from src/main/watchdog.js) still runs; deleting
 # either one leaves the other intact. An admin child has to locate and
@@ -21,6 +28,13 @@
 $ErrorActionPreference = 'Continue'
 $exePath = Join-Path ${env:ProgramFiles} 'PearGuard\PearGuard.exe'
 $pollSeconds = 60
+$staleSeconds = 180
+# A just-started app writes its first heartbeat only once the worklet is up,
+# so a younger process is never judged frozen.
+$graceSeconds = 300
+$clock = [Diagnostics.Stopwatch]::StartNew()
+$lastHeartbeat = $null
+$heartbeatSince = 0
 
 Add-Type -TypeDefinition @'
 using System;
@@ -164,6 +178,39 @@ function Write-Log {
   Write-Host ("[" + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + "] " + $line)
 }
 
+# The PearGuard main process, or $null. Electron helper processes share the
+# exe name but carry --type= on their command line.
+function Get-MainProcess {
+  $procs = @(Get-CimInstance Win32_Process -Filter "Name='PearGuard.exe'" -ErrorAction SilentlyContinue)
+  foreach ($p in $procs) {
+    if ($p.CommandLine -notmatch '--type=') { return $p }
+  }
+  return $null
+}
+
+# lastHeartbeat from the runtime-state.json of the user running $proc, or
+# $null if it can't be read.
+function Get-Heartbeat {
+  param($proc)
+  try {
+    $sid = (Invoke-CimMethod -InputObject $proc -MethodName GetOwnerSid).Sid
+    $profilePath = (Get-CimInstance Win32_UserProfile -Filter "SID='$sid'").LocalPath
+    $statePath = Join-Path $profilePath 'AppData\Roaming\pearguard-desktop\runtime-state.json'
+    return (Get-Content -Raw $statePath | ConvertFrom-Json).lastHeartbeat
+  } catch {
+    return $null
+  }
+}
+
+function Start-PearGuard {
+  try {
+    $status = [PGWatchdog]::LaunchInActiveSession($exePath)
+    Write-Log ("relaunched " + $exePath + " " + $status)
+  } catch {
+    Write-Log ("launch failed: " + $_.Exception.Message)
+  }
+}
+
 Write-Log 'service started'
 
 while ($true) {
@@ -175,14 +222,31 @@ while ($true) {
       continue
     }
 
-    $running = @(Get-Process -Name PearGuard -ErrorAction SilentlyContinue).Count -gt 0
-    if (-not $running) {
+    $main = Get-MainProcess
+    $now = $clock.Elapsed.TotalSeconds
+    if (-not $main) {
+      $lastHeartbeat = $null
       Write-Log 'PearGuard.exe not running; attempting relaunch'
-      try {
-        $status = [PGWatchdog]::LaunchInActiveSession($exePath)
-        Write-Log ("relaunched " + $exePath + " " + $status)
-      } catch {
-        Write-Log ("launch failed: " + $_.Exception.Message)
+      Start-PearGuard
+    } else {
+      $hb = Get-Heartbeat $main
+      if ($null -eq $hb) {
+        # No readable state file yet (fresh install, never paired): nothing
+        # to judge freshness by.
+        $lastHeartbeat = $null
+      } elseif ($hb -ne $lastHeartbeat) {
+        $lastHeartbeat = $hb
+        $heartbeatSince = $now
+      } else {
+        $age = ((Get-Date) - $main.CreationDate).TotalSeconds
+        $unchanged = $now - $heartbeatSince
+        if ($age -ge $graceSeconds -and $unchanged -ge $staleSeconds) {
+          Write-Log ("PearGuard.exe pid " + $main.ProcessId + " has not written a heartbeat in " + [int]$unchanged + "s; restarting")
+          & taskkill.exe /pid $main.ProcessId /t /f | Out-Null
+          Start-Sleep -Seconds 2
+          $lastHeartbeat = $null
+          Start-PearGuard
+        }
       }
     }
   }
