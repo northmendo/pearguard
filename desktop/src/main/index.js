@@ -706,8 +706,7 @@ app.whenReady().then(() => {
     const isOwnWindow = (info) => {
       if (!info || typeof info.pid !== 'number') return false
       if (info.pid === process.pid) return true
-      const overlayPid = overlay.getRendererPid()
-      if (overlayPid && info.pid === overlayPid) return true
+      if (overlay.getRendererPids().includes(info.pid)) return true
       if (mainWindow && !mainWindow.isDestroyed()) {
         try {
           const mainPid = mainWindow.webContents.getOSProcessId()

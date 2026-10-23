@@ -4131,7 +4131,7 @@ test('screen-time cap survives a throwing usage map', () => {
 
 test('overlay re-renders when the reason changes for the same app', () => {
   const shown = []
-  const overlay = { show: (p) => shown.push(p), hide: () => {}, getRendererPid: () => null }
+  const overlay = { show: (p) => shown.push(p), hide: () => {}, getRendererPids: () => [] }
   const controller = new EnforcementController({
     activeWin: async () => null,
     overlay,
@@ -4202,4 +4202,130 @@ test('a per-app window block is not deviceWide', () => {
   })
   assert.strictEqual(r.category, 'schedule')
   assert.ok(!r.deviceWide)
+})
+
+// --- Overlay covers every display (#292) ---------------------------------
+
+const { OverlayManager } = require('../src/main/overlay')
+const { EventEmitter: OverlayEmitter } = require('events')
+
+function fakeOverlayElectron(displays) {
+  let nextPid = 100
+  const created = []
+  class FakeWin extends OverlayEmitter {
+    constructor(opts) {
+      super()
+      this.opts = opts
+      this.bounds = { x: opts.x, y: opts.y, width: opts.width, height: opts.height }
+      this.destroyed = false
+      this.focused = false
+      const wc = new OverlayEmitter()
+      wc.sent = []
+      wc.send = (ch, data) => wc.sent.push({ ch, data })
+      const pid = nextPid++
+      wc.getOSProcessId = () => pid
+      this.webContents = wc
+      created.push(this)
+    }
+    setAlwaysOnTop() {}
+    setMenuBarVisibility() {}
+    loadFile() {}
+    show() {}
+    focus() { this.focused = true }
+    getBounds() { return { ...this.bounds } }
+    setBounds(b) { this.bounds = { ...b } }
+    isDestroyed() { return this.destroyed }
+    destroy() { this.destroyed = true; this.emit('closed') }
+  }
+  const screen = new OverlayEmitter()
+  screen.getAllDisplays = () => displays
+  screen.getPrimaryDisplay = () => displays[0]
+  const ipcMain = new OverlayEmitter()
+  const registered = new Set()
+  const globalShortcut = {
+    register: (a) => registered.add(a),
+    unregister: (a) => registered.delete(a),
+  }
+  return { electron: { BrowserWindow: FakeWin, screen, ipcMain, globalShortcut }, created, registered }
+}
+
+const PRIMARY = { id: 1, bounds: { x: 0, y: 0, width: 1920, height: 1080 } }
+const SECOND = { id: 2, bounds: { x: 1920, y: 0, width: 2560, height: 1440 } }
+
+test('overlay opens one window per display, each on its own bounds', () => {
+  const f = fakeOverlayElectron([PRIMARY, SECOND])
+  const o = new OverlayManager({ rendererDir: '/r', electron: f.electron })
+  o.show({ packageName: 'a', appName: 'A' })
+  assert.strictEqual(f.created.length, 2)
+  assert.deepStrictEqual(f.created[0].bounds, PRIMARY.bounds)
+  assert.deepStrictEqual(f.created[1].bounds, SECOND.bounds)
+  assert.ok(f.created[0].focused, 'primary overlay takes focus')
+  assert.strictEqual(f.registered.size, BLOCKED_GLOBAL_SHORTCUTS.length)
+  assert.deepStrictEqual(o.getRendererPids().sort(), [100, 101])
+})
+
+test('overlay re-show reuses windows and pushes the new payload to all of them', () => {
+  const f = fakeOverlayElectron([PRIMARY, SECOND])
+  const o = new OverlayManager({ rendererDir: '/r', electron: f.electron })
+  o.show({ packageName: 'a' })
+  o.show({ packageName: 'b' })
+  assert.strictEqual(f.created.length, 2)
+  for (const w of f.created) {
+    assert.deepStrictEqual(w.webContents.sent.at(-1), { ch: 'overlay:payload', data: { packageName: 'b' } })
+  }
+})
+
+test('overlay covers a display plugged in while it is up and drops a removed one', () => {
+  const displays = [PRIMARY]
+  const f = fakeOverlayElectron(displays)
+  const o = new OverlayManager({ rendererDir: '/r', electron: f.electron })
+  o.show({ packageName: 'a' })
+  assert.strictEqual(f.created.length, 1)
+  displays.push(SECOND)
+  f.electron.screen.emit('display-added')
+  assert.strictEqual(f.created.length, 2)
+  assert.deepStrictEqual(f.created[1].bounds, SECOND.bounds)
+  displays.pop()
+  f.electron.screen.emit('display-removed')
+  assert.ok(f.created[1].destroyed)
+  assert.ok(!f.created[0].destroyed)
+  assert.deepStrictEqual(o.getRendererPids(), [100])
+})
+
+test('overlay follows a display that moves or changes resolution', () => {
+  const displays = [PRIMARY, { ...SECOND }]
+  const f = fakeOverlayElectron(displays)
+  const o = new OverlayManager({ rendererDir: '/r', electron: f.electron })
+  o.show({ packageName: 'a' })
+  displays[1] = { id: 2, bounds: { x: -1280, y: 0, width: 1280, height: 1024 } }
+  f.electron.screen.emit('display-metrics-changed')
+  assert.strictEqual(f.created.length, 2)
+  assert.deepStrictEqual(f.created[1].bounds, displays[1].bounds)
+})
+
+test('overlay hide destroys every window and stops tracking displays', () => {
+  const displays = [PRIMARY, SECOND]
+  const f = fakeOverlayElectron(displays)
+  const o = new OverlayManager({ rendererDir: '/r', electron: f.electron })
+  o.show({ packageName: 'a' })
+  o.hide()
+  assert.ok(f.created.every((w) => w.destroyed))
+  assert.strictEqual(f.registered.size, 0)
+  assert.deepStrictEqual(o.getRendererPids(), [])
+  f.electron.screen.emit('display-added')
+  assert.strictEqual(f.created.length, 2, 'no window appears after hide')
+})
+
+test('overlay sends a result only to the screen that asked', () => {
+  const f = fakeOverlayElectron([PRIMARY, SECOND])
+  const o = new OverlayManager({ rendererDir: '/r', electron: f.electron })
+  const asked = []
+  o.on('verify-pin', (p) => asked.push(p))
+  o.show({ packageName: 'a' })
+  const [w1, w2] = f.created
+  f.electron.ipcMain.emit('overlay:verify-pin', { sender: w2.webContents }, { pin: '1234' })
+  assert.deepStrictEqual(asked, [{ pin: '1234' }])
+  o.notifyResult('overlay:pin-verify-result', { ok: false })
+  assert.ok(!w1.webContents.sent.some((m) => m.ch === 'overlay:pin-verify-result'))
+  assert.ok(w2.webContents.sent.some((m) => m.ch === 'overlay:pin-verify-result'))
 })
