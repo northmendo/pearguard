@@ -5,13 +5,18 @@
 // Step 1: Enable Accessibility Service
 // Step 2: Grant Usage Access
 // Step 3: Allow background running (battery optimization whitelist)
-// Step 4: Pair with parent (skipped if already paired)
+// Step 4: Pair with parent (skipped if already paired). The child either scans
+//         the parent's QR code or, on a device without a camera, shows its own
+//         code for the parent to scan (Add Child -> Scan on the parent).
 // No back button (gestureEnabled: false in _layout.tsx).
 
 import { useState, useEffect, useRef } from 'react'
-import { View, Text, TouchableOpacity, StyleSheet, Linking, NativeModules, ActivityIndicator, Modal } from 'react-native'
+import { View, Text, TouchableOpacity, StyleSheet, Linking, NativeModules, ActivityIndicator, Modal, Share } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { CameraView, useCameraPermissions } from 'expo-camera'
+import { SvgXml } from 'react-native-svg'
+// @ts-ignore - qrcode ships no types; only toString() is used here
+import QRCode from 'qrcode'
 import { getBareCaller } from './setup'
 import NativeIcon from './NativeIcon'
 import { colors, spacing, radius, typography, fontFamily } from '../src/rn-theme'
@@ -160,6 +165,10 @@ export default function ChildSetupScreen() {
   const [showScanner, setShowScanner] = useState(false)
   const [pairState, setPairState] = useState<'idle' | 'connecting' | 'error'>('idle')
   const [pairError, setPairError] = useState<string | null>(null)
+  // Child-hosted invite for devices without a camera: the parent scans this.
+  const [childInvite, setChildInvite] = useState<{ link: string; svg: string } | null>(null)
+  const [childInviteLoading, setChildInviteLoading] = useState(false)
+  const pairPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const isBypassRecovery = source === 'bypass_recovery'
 
   useEffect(() => {
@@ -200,6 +209,23 @@ export default function ChildSetupScreen() {
     }, 1500)
     return () => clearInterval(timerId)
   }, [step, router])
+
+  useEffect(() => () => { if (pairPollRef.current) clearInterval(pairPollRef.current) }, [])
+
+  // Leave the wizard once the bare worklet reports a paired parent.
+  function waitForParent(callBare: (method: string, args: any) => Promise<any>) {
+    if (pairPollRef.current) clearInterval(pairPollRef.current)
+    pairPollRef.current = setInterval(async () => {
+      try {
+        const r = await callBare('peers:hasParent', {})
+        if (r?.hasPeers) {
+          if (pairPollRef.current) clearInterval(pairPollRef.current)
+          pairPollRef.current = null
+          router.replace('/')
+        }
+      } catch (_e) {}
+    }, 1500)
+  }
 
   async function advanceFromStep3() {
     const callBare = getBareCaller()
@@ -261,15 +287,38 @@ export default function ChildSetupScreen() {
       setPairError(e.message || 'Failed to process invite. Please try again.')
       return
     }
-    const pollId = setInterval(async () => {
-      try {
-        const r = await callBare('peers:hasParent', {})
-        if (r?.hasPeers) {
-          clearInterval(pollId)
-          router.replace('/')
-        }
-      } catch (_e) {}
-    }, 1500)
+    waitForParent(callBare)
+  }
+
+  async function showChildInvite() {
+    setPairError(null)
+    const callBare = getBareCaller()
+    if (!callBare) {
+      setPairError('App not ready. Please wait a moment and try again.')
+      return
+    }
+    setChildInviteLoading(true)
+    try {
+      const { inviteLink } = await callBare('child-invite:generate', {})
+      const svg = await QRCode.toString(inviteLink, { type: 'svg', margin: 2, color: { dark: '#000000', light: '#ffffff' } })
+      setChildInvite({ link: inviteLink, svg })
+      waitForParent(callBare)
+    } catch (_e) {
+      setPairError('Failed to generate invite. Please try again.')
+    } finally {
+      setChildInviteLoading(false)
+    }
+  }
+
+  function hideChildInvite() {
+    if (pairPollRef.current) clearInterval(pairPollRef.current)
+    pairPollRef.current = null
+    setChildInvite(null)
+  }
+
+  function shareChildInvite() {
+    if (!childInvite) return
+    Share.share({ message: `Tap this link on the parent device to pair with PearGuard:\n\n${childInvite.link}` }).catch(() => {})
   }
 
   function openSettings() {
@@ -318,6 +367,36 @@ export default function ChildSetupScreen() {
     )
   }
 
+  if (step === 4 && childInvite) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.stepLabel}>Step 4 of 4</Text>
+
+        <Text style={styles.title}>Pair with your parent</Text>
+        <Text style={styles.description}>
+          On the parent's device, open PearGuard, tap "Add Child" on the Dashboard and choose Scan. Then scan this code.
+        </Text>
+
+        <View style={styles.qrBox}>
+          <SvgXml xml={childInvite.svg} width={220} height={220} />
+        </View>
+
+        <TouchableOpacity style={styles.buttonPair} onPress={shareChildInvite} activeOpacity={0.8}>
+          <Text style={styles.buttonPairText}>Share Link Instead</Text>
+        </TouchableOpacity>
+
+        <View style={styles.waitingRow}>
+          <ActivityIndicator size="small" color={colors.text.muted} />
+          <Text style={styles.waitingText}>Waiting for parent to scan...</Text>
+        </View>
+
+        <TouchableOpacity style={styles.skipButton} onPress={hideChildInvite} activeOpacity={0.8}>
+          <Text style={styles.skipButtonText}>Back</Text>
+        </TouchableOpacity>
+      </View>
+    )
+  }
+
   if (step === 4) {
     return (
       <View style={styles.container}>
@@ -350,6 +429,16 @@ export default function ChildSetupScreen() {
               activeOpacity={0.8}
             >
               <Text style={styles.buttonPairText}>Scan Parent's QR Code</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.skipButton}
+              onPress={showChildInvite}
+              disabled={childInviteLoading}
+              activeOpacity={0.8}
+            >
+              {childInviteLoading
+                ? <ActivityIndicator size="small" color={colors.text.muted} />
+                : <Text style={styles.skipButtonText}>No camera? Show a code for your parent to scan</Text>}
             </TouchableOpacity>
           </>
         )}
@@ -421,6 +510,7 @@ const styles = StyleSheet.create({
   skipButtonText:   { color: colors.text.muted, fontSize: 14, fontFamily: fontFamily.regular },
   buttonPair:       { backgroundColor: colors.surface.tintedBlue, borderWidth: 1, borderColor: colors.accent, borderRadius: radius.lg, paddingVertical: 14, paddingHorizontal: spacing.lg, width: '100%', alignItems: 'center', marginBottom: spacing.base },
   buttonPairText:   { color: colors.accent, fontSize: 15, fontFamily: fontFamily.semibold },
+  qrBox:            { backgroundColor: '#ffffff', borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.xl },
   waitingRow:       { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   waitingText:      { color: colors.text.muted, fontSize: 13, fontFamily: fontFamily.regular },
   connectingBox:    { alignItems: 'center', gap: spacing.md, marginBottom: spacing.base },
