@@ -1,8 +1,4 @@
 ## What's Changed
 
-Improvements
-  - On computers with more than one monitor, the block screen now covers every screen. A blocked app can no longer be dragged to a second monitor and used there.
-  - PearGuard now restarts itself if it is closed or freezes on a child's Linux computer. It also restarts after a freeze on Windows, where before it only restarted if it was closed.
-
 Bug Fixes
-  - Fixed a rare problem that could stop PearGuard from working in the background after saving data.
+  - Child devices without a camera can now finish setup. On the last setup step, tap "No camera? Show a code for your parent to scan" and the parent scans the code from their phone. You can also share a pairing link instead.
