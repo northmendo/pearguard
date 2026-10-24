@@ -487,6 +487,7 @@ PUBLISH_PLAY=false
 PUBLISH_APP_STORE=false
 PUBLISH_DESKTOP=false
 PUBLISH_FAILED=false   # set to true if any selected publish step fails
+NEEDS_BUILD=false      # set true by the destination prompts below; stays false in ZAPSTORE_ONLY mode
 
 _play_configured && PUBLISH_PLAY=true
 
@@ -633,6 +634,16 @@ if ! $ZAPSTORE_ONLY && ! $CHECK_VERSIONS_ONLY; then
     echo "    Note: Google Play requires AAB format. Both APK and AAB will be built."
     echo ""
   fi
+elif $ZAPSTORE_ONLY; then
+  # Republish the existing GitHub release to Zapstore. Nothing is built, so
+  # every other destination stays off (they would otherwise run with no
+  # artifacts, or re-announce a release that already went out).
+  PUBLISH_GITHUB=false
+  PUBLISH_NOSTR=false
+  PUBLISH_PLAY=false
+  PUBLISH_APP_STORE=false
+  PUBLISH_DESKTOP=false
+  PUBLISH_LINUX=false
 fi
 
 # Artifact names and sizes, declared before the build fences so the post-notes
