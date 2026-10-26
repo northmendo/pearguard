@@ -25,16 +25,16 @@ license: MIT
 website: https://github.com/peerloomllc/pearguard
 
 images:
-  - ./metadata/android/screenshots/Pixel_9_Pro_Framed/light/scene-1.png
-  - ./metadata/android/screenshots/Pixel_9_Pro_Framed/light/scene-2.png
-  - ./metadata/android/screenshots/Pixel_9_Pro_Framed/light/scene-3.png
-  - ./metadata/android/screenshots/Pixel_9_Pro_Framed/light/scene-4.png
-  - ./metadata/android/screenshots/Pixel_9_Pro_Framed/light/scene-5.png
-  - ./metadata/android/screenshots/Pixel_9_Pro_Framed/light/scene-6.png
-  - ./metadata/android/screenshots/Pixel_9_Pro_Framed/light/scene-7.png
-  - ./metadata/android/screenshots/Pixel_9_Pro_Framed/light/scene-8.png
-  - ./metadata/android/screenshots/Pixel_9_Pro_Framed/light/scene-9.png
-  - ./metadata/android/screenshots/Pixel_9_Pro_Framed/light/scene-10.png
+  - metadata/zapstore/01-light-scene-1.webp
+  - metadata/zapstore/02-light-scene-2.webp
+  - metadata/zapstore/03-light-scene-3.webp
+  - metadata/zapstore/04-light-scene-4.webp
+  - metadata/zapstore/05-light-scene-5.webp
+  - metadata/zapstore/06-light-scene-6.webp
+  - metadata/zapstore/07-light-scene-7.webp
+  - metadata/zapstore/08-light-scene-8.webp
+  - metadata/zapstore/09-light-scene-9.webp
+  - metadata/zapstore/10-light-scene-10.webp
 
 metadata_sources:
   - github
