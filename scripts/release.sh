@@ -1059,90 +1059,13 @@ print(json.dumps({'tag_name': '${RELEASE_TAG}', 'name': '${RELEASE_TAG}', 'body'
   UPLOAD_URL=$(printf '%s' "$RELEASE_RESP" \
     | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['upload_url'].split('{')[0])")
 
-  # Existing assets on this release, as "<id>\t<name>" lines, so we can delete
-  # any name collision before re-uploading (GitHub rejects a duplicate asset
-  # name with already_exists). Empty for a freshly created release.
-  EXISTING_ASSETS=$(printf '%s' "$RELEASE_RESP" \
-    | python3 -c "
-import sys, json
-try:
-    d = json.load(sys.stdin)
-    for a in d.get('assets', []):
-        print(str(a.get('id','')) + '\t' + a.get('name',''))
-except Exception:
-    pass
-" 2>/dev/null || echo "")
-
-  # --- Upload the assets, several at a time ---
-  #
-  # These went out strictly one after another. A release carries the APK, the
-  # AAB, the .exe, the AppImage, the .deb, their .sha256 sidecars and the two
-  # update manifests, so the run spent minutes feeding GitHub one file at a
-  # time over a link nowhere near saturated. Uploads are network-bound and
-  # independent of each other, so they now overlap.
-  #
-  # Bounded rather than all at once: too many parallel streams to one host stop
-  # adding throughput and start competing. The per-file progress bars are gone
-  # because interleaved bars are unreadable; every response is still captured
-  # and checked below, so a failure in any upload is caught exactly as before.
-  RELEASE_UPLOAD_JOBS="${RELEASE_UPLOAD_JOBS:-4}"
-
-  # Deletions first and sequentially: they are small, and doing them up front
-  # means no upload can race the removal of the name it is about to claim.
-  for _asset in "${RELEASE_ASSETS[@]}"; do
-    _basename=$(basename "$_asset")
-    _existing_id=$(printf '%s\n' "$EXISTING_ASSETS" \
-      | awk -F'\t' -v n="$_basename" '$2 == n {print $1; exit}')
-    if [ -n "$_existing_id" ]; then
-      echo "==> Replacing existing asset $_basename (id $_existing_id)..."
-      curl -s -X DELETE \
-        -H "Authorization: Bearer $GH_TOKEN" \
-        -H "Accept: application/vnd.github+json" \
-        "https://api.github.com/repos/${REPO_SLUG}/releases/assets/${_existing_id}" >/dev/null
-    fi
-  done
-
-  echo "==> Uploading ${#RELEASE_ASSETS[@]} asset(s), up to ${RELEASE_UPLOAD_JOBS} at a time..."
-  _upload_started_at=$(date +%s)
-  _upload_resps=(); _upload_names=()
-  for _asset in "${RELEASE_ASSETS[@]}"; do
-    _ctype=$(_asset_content_type "$_asset")
-    _basename=$(basename "$_asset")
-    _respfile=$(mktemp)
-    _upload_resps+=("$_respfile"); _upload_names+=("$_basename")
-    echo "    uploading $_basename ($_ctype, $(du -h "$_asset" | cut -f1))"
-    curl -s \
-      -X POST \
-      -H "Authorization: Bearer $GH_TOKEN" \
-      -H "Accept: application/vnd.github+json" \
-      -H "Content-Type: $_ctype" \
-      "${UPLOAD_URL}?name=${_basename}" \
-      --data-binary "@${_asset}" \
-      -o "$_respfile" 2>/dev/null &
-    while [ "$(jobs -rp | wc -l)" -ge "$RELEASE_UPLOAD_JOBS" ]; do wait -n 2>/dev/null || true; done
-  done
-  wait
-  echo "    Uploads finished in $(( $(date +%s) - _upload_started_at ))s. Checking each response..."
-
-  # --- Check every upload ---
-  for _upload_idx in "${!_upload_resps[@]}"; do
-    _basename="${_upload_names[$_upload_idx]}"
-    UPLOAD_RESP=$(cat "${_upload_resps[$_upload_idx]}"); rm -f "${_upload_resps[$_upload_idx]}"
-
-    UPLOAD_ERROR=$(printf '%s' "$UPLOAD_RESP" \
-      | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('message',''))" \
-      2>/dev/null || echo "")
-    if [ -n "$UPLOAD_ERROR" ]; then
-      echo ""
-      echo "ERROR: Upload of $_basename failed:"
-      printf '%s\n' "$UPLOAD_RESP" | python3 -m json.tool 2>/dev/null || printf '%s\n' "$UPLOAD_RESP"
-      echo ""
-      echo "The GitHub release was created but $_basename was not attached."
-      echo "You can upload it manually at: https://github.com/${REPO_SLUG}/releases/tag/${RELEASE_TAG}"
-      exit 1
-    fi
-    echo "    ok  $_basename"
-  done
+  # Several at a time with one progress line (shared library).
+  if ! release_upload_assets "$UPLOAD_URL" "${RELEASE_ASSETS[@]}"; then
+    echo ""
+    echo "ERROR: The GitHub release was created but ${#RELEASE_UPLOAD_FAILED[@]} file(s) were not attached."
+    echo "You can upload them manually at: https://github.com/${REPO_SLUG}/releases/tag/${RELEASE_TAG}"
+    exit 1
+  fi
 
 else
   # Fallback: gh CLI (requires working auth). gh accepts multiple positional
